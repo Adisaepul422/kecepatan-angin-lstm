@@ -1,0 +1,8 @@
+flask>=3.0
+gunicorn>=22.0
+numpy
+pandas
+scikit-learn
+joblib
+# Samakan versi TensorFlow dengan yang dipakai saat training (cek: pip show tensorflow)
+tensorflow-cpu>=2.16

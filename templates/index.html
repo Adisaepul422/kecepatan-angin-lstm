@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Peramalan Kecepatan Angin dengan LSTM</title>
+<style>
+  :root { --bg:#f5f7fa; --card:#fff; --text:#1f2933; --muted:#667085; --accent:#1769aa; --line:#e4e7ec; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  header { background:var(--accent); color:#fff; padding:22px 20px; }
+  header h1 { margin:0 0 4px; font-size:1.35rem; }
+  header p { margin:0; opacity:.9; font-size:.92rem; }
+  main { max-width:1100px; margin:0 auto; padding:20px; display:grid; gap:18px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+  .card h2 { margin:0 0 10px; font-size:1rem; }
+  .label { color:var(--muted); font-size:.82rem; }
+  .big { font-size:2rem; font-weight:700; color:var(--accent); line-height:1.2; }
+  .sub { color:var(--muted); font-size:.85rem; margin-top:4px; }
+  .toolbar { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  button { border:1px solid var(--line); background:#fff; padding:6px 12px; border-radius:8px; cursor:pointer; font-size:.85rem; }
+  button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .chart-box { position:relative; height:320px; }
+  table { width:100%; border-collapse:collapse; font-size:.9rem; }
+  td, th { padding:6px 8px; border-bottom:1px solid var(--line); text-align:left; }
+  .warn { background:#fff4e5; border:1px solid #ffd8a8; padding:14px 16px; border-radius:10px; }
+  footer { text-align:center; color:var(--muted); font-size:.8rem; padding:10px 0 26px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Peramalan Kecepatan Angin per Jam (LSTM)</h1>
+  <p>Data SCADA turbin angin, dirata-ratakan per jam. Model memprediksi kecepatan angin satu jam ke depan dari 24 jam terakhir.</p>
+</header>
+<main>
+{% if not ready %}
+  <div class="warn"><b>Model belum tersedia.</b> Jalankan notebook <code>TA_04_LSTM_Wind_Turbine.ipynb</code> sampai selesai
+  agar folder <code>artifacts/</code> terisi (model, scaler, dan data), lalu muat ulang halaman ini.</div>
+{% else %}
+  <section class="grid">
+    <div class="card">
+      <div class="label">Prediksi kecepatan angin jam berikutnya</div>
+      <div class="big" id="fc-value">Memuat...</div>
+      <div class="sub" id="fc-time">Model sedang dimuat, mohon tunggu sekitar 30-60 detik saat pertama kali.</div>
+    </div>
+    <div class="card">
+      <div class="label">Nilai aktual terakhir</div>
+      <div class="big" id="last-value" style="color:var(--text)">Memuat...</div>
+      <div class="sub" id="last-time"></div>
+    </div>
+    <div class="card">
+      <h2>Kinerja model (data uji)</h2>
+      <table>
+        <tr><th></th><th>RMSE</th><th>MAE</th></tr>
+        <tr><td>LSTM</td><td id="m-rmse">-</td><td id="m-mae">-</td></tr>
+        <tr><td>Baseline*</td><td id="b-rmse">-</td><td id="b-mae">-</td></tr>
+      </table>
+      <div class="sub">*Baseline: kecepatan jam ini = kecepatan jam sebelumnya. Satuan m/s.</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Data historis kecepatan angin (m/s)</h2>
+    <div class="toolbar" id="range-btns">
+      <button data-r="7d">7 hari</button>
+      <button data-r="30d" class="active">30 hari</button>
+      <button data-r="90d">90 hari</button>
+      <button data-r="all">Semua (rata-rata harian)</button>
+    </div>
+    <div class="chart-box"><canvas id="chart-history"></canvas></div>
+    <div class="sub" id="data-range"></div>
+  </section>
+
+  <section class="card">
+    <h2>Aktual vs prediksi LSTM pada data uji</h2>
+    <div class="toolbar" id="test-btns">
+      <button data-n="72">3 hari</button>
+      <button data-n="168" class="active">7 hari</button>
+      <button data-n="336">14 hari</button>
+    </div>
+    <div class="chart-box"><canvas id="chart-test"></canvas></div>
+  </section>
+{% endif %}
+</main>
+<footer>Tugas Akhir 04 - Pembelajaran Mesin | Model: LSTM (TensorFlow/Keras), Flask</footer>
+
+{% if ready %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const fmtVal = (v) => v.toLocaleString("id-ID", {maximumFractionDigits: 2}) + " m/s";
+let histChart, testChart;
+
+async function getJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+  return r.json();
+}
+
+function lineChart(canvasId, labels, datasets) {
+  return new Chart($(canvasId), {
+    type: "line",
+    data: { labels, datasets },
+    options: { responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: "index", intersect: false },
+      elements: { point: { radius: 0 } },
+      scales: { x: { ticks: { maxTicksLimit: 8 } }, y: { title: { display: true, text: "m/s" } } } }
+  });
+}
+
+async function loadSummary() {
+  const s = await getJSON("/api/summary");
+  $("m-rmse").textContent = s.rmse.toFixed(3);  $("m-mae").textContent = s.mae.toFixed(3);
+  $("b-rmse").textContent = s.rmse_baseline.toFixed(3);  $("b-mae").textContent = s.mae_baseline.toFixed(3);
+  $("data-range").textContent = `Periode data: ${s.data_start} sampai ${s.data_end} (${s.n_hours.toLocaleString("id-ID")} jam).`;
+}
+
+async function loadForecast() {
+  const f = await getJSON("/api/forecast");
+  $("fc-value").textContent = fmtVal(f.forecast);
+  $("fc-time").textContent = "Untuk jam " + f.target_time;
+  $("last-value").textContent = fmtVal(f.last_observed);
+  $("last-time").textContent = "Pada jam " + f.last_observed_time;
+}
+
+async function loadHistory(range) {
+  const d = await getJSON("/api/history?range=" + range);
+  if (histChart) histChart.destroy();
+  histChart = lineChart("chart-history", d.labels,
+    [{ label: "Kecepatan angin (m/s)", data: d.values, borderColor: "#1769aa", borderWidth: 1.5, tension: 0.2 }]);
+}
+
+async function loadTest(n) {
+  const d = await getJSON("/api/test?n=" + n);
+  if (testChart) testChart.destroy();
+  testChart = lineChart("chart-test", d.labels, [
+    { label: "Aktual", data: d.actual, borderColor: "#1769aa", borderWidth: 1.5 },
+    { label: "Prediksi LSTM", data: d.prediction, borderColor: "#e8590c", borderWidth: 1.5 }]);
+}
+
+function wire(groupId, attr, handler) {
+  $(groupId).addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    $(groupId).querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active"); handler(b.dataset[attr]);
+  });
+}
+
+wire("range-btns", "r", loadHistory);
+wire("test-btns", "n", loadTest);
+Promise.all([loadSummary(), loadForecast(), loadHistory("30d"), loadTest(168)])
+  .catch((err) => { document.querySelector("main").insertAdjacentHTML("afterbegin",
+    '<div class="warn">Terjadi kesalahan: ' + err.message + "</div>"); });
+</script>
+{% endif %}
+</body>
+</html>

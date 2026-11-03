@@ -1,0 +1,16 @@
+{
+  "timesteps": 24,
+  "features": [
+    "wind_speed",
+    "dir_sin",
+    "dir_cos"
+  ],
+  "target": "wind_speed",
+  "freq": "1h",
+  "max_value": 23.746877034505165,
+  "unit": "m/s",
+  "rmse": 1.1862197073915302,
+  "mae": 0.8692506606663974,
+  "rmse_baseline": 1.1544745238645735,
+  "mae_baseline": 0.8108297148648521
+}
