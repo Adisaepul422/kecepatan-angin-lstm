@@ -1,0 +1,10 @@
+# File yang tidak dibutuhkan aplikasi saat berjalan (tetap ada di GitHub, hanya tidak ikut di-deploy)
+T1.csv
+*.ipynb
+dokumen/
+export_for_deploy.py
+artifacts/model_lstm.h5
+artifacts/model_lstm.keras
+artifacts/scaler_X.joblib
+artifacts/scaler_y.joblib
+venv/
